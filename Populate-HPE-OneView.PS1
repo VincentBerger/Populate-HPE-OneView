@@ -1,3 +1,20 @@
+$ip_addr  = "192.168.0.19" # "<DHCP IP Address assigned to DCS appliance>"
+$password = "P@ssw0rd"  # "<New Administrator Password>"
+$hostname = "ov89-vb.lj.lab"  # "<Hostname associated with DHCP IP Address of the DCS appliance>"
+
+if (!(Get-Module -Name HPEOneView.*)) {
+    if (!(Get-Module -ListAvailable -Name HPEOneView.*)) {
+        Write-Output "No suitable HPEOneView module found. Please run Install-Module"
+    } else {
+        $module = Get-Module -ListAvailable -Name HPEOneView.* | Select-Object Name | Sort-Object -Property Name | select-object -last 1
+        Write-Output "About to import"$module.Name". If you want an older version, please import it before running this script"
+        Import-Module $module.Name
+    }
+} else {
+    $module = Get-Module -Name HPEOneView.*
+    Write-Output "Found module"$module.Name
+}
+
 #
 # Function Declarations
 #
@@ -8,177 +25,278 @@ function ConfigureAppliance {
     )
 
     # Accept the EULA
-    if (Get-HPOVEulaStatus -appliance $vm_ipaddr) {
+    if (Get-OVEulaStatus -appliance $vm_ipaddr) {
         Write-Output $vm_ipaddr "Accepting EULA..."
-        $ret = Set-HPOVEulaStatus -supportAccess "yes" -appliance $vm_ipaddr
+        $ret = Set-OVEulaStatus -supportAccess "yes" -appliance $vm_ipaddr
     }
 
     # For initial setup, connect first using "default" Administrator credentials
     try {
-        $ret = Connect-HPOVMgmt -appliance $vm_ipaddr -user "Administrator" -password "admin"
-    } catch [ HPOneView.Appliance.PasswordChangeRequired ] {
-        $ret = Set-HPOVInitialPassword -oldPassword "admin" -newPassword "$vm_password" -Appliance $vm_ipaddr
+        [securestring]$secStringPassword = ConvertTo-SecureString "admin" -AsPlainText -Force
+        $orig_credential = New-Object System.Management.Automation.PSCredential('Administrator',$secStringPassword)
+        $ret = Connect-OVMgmt -appliance $vm_ipaddr -Credential $orig_credential
+    } catch [ HPEOneView.Appliance.PasswordChangeRequired ] {
+        $ret = Set-OVInitialPassword -oldPassword "admin" -newPassword "$vm_password" -Appliance $vm_ipaddr
     }
-    $ret = Connect-HPOVMgmt -appliance $vm_ipaddr -user Administrator -password "$vm_password"
+    [securestring]$secStringPassword = ConvertTo-SecureString $vm_password -AsPlainText -Force
+    $credential = New-Object System.Management.Automation.PSCredential('Administrator',$secStringPassword)
+    $ret = Connect-OVMgmt -appliance $vm_ipaddr -Credential $credential
 
     #
     # Update the networking configuration.
     # Key assumption here is that DHCP address we received initially will not change.
-    $task = Set-HPOVApplianceNetworkConfig -hostname $vm_hostname -ipv4type "DHCP" -ipv6type "UNCONFIGURE"
-    Disconnect-HPOVMgmt
+    $task = Set-OVApplianceNetworkConfig -hostname $vm_hostname -ipv4type "DHCP" -ipv6type "UNCONFIGURE"
+    Disconnect-OVMgmt
 }
 
 function ImportSANManager {
-    Add-HPOVSanManager  -type BNA -hostname "172.18.15.1" -username dcs -password dcs -usessl
+    Add-OVSanManager -Hostname 172.18.20.1 -SnmpUserName dcs-SHA-AES128 -SnmpAuthLevel AuthAndPriv -SnmpAuthPassword dcsdcsdcs -SnmpAuthProtocol sha -SnmpPrivPassword dcsdcsdcs -SnmpPrivProtocol aes-128 -Type Cisco -Port 161 | Wait-OVTaskComplete
 }
 
 function CreateNetworks {
-    # Create the Ethernet networks
-    New-HPOVNetwork -name "corpnet A"       -type "Ethernet" -vlanId 10     -smartlink $true
-    New-HPOVNetwork -name "corpnet B"       -type "Ethernet" -vlanId 10     -smartlink $true
-    New-HPOVNetwork -name "ESXi mgmt A"     -type "Ethernet" -vlanId 1131   -smartlink $true
-    New-HPOVNetwork -name "ESXi vmotion A"  -type "Ethernet" -vlanId 1132   -smartlink $true
-    New-HPOVNetwork -name "ESXi mgmt B"     -type "Ethernet" -vlanId 1131   -smartlink $true
-    New-HPOVNetwork -name "ESXi vmotion B"  -type "Ethernet" -vlanId 1132   -smartlink $true
-    New-HPOVNetwork -name "prod vm1 A"      -type "Ethernet" -vlanId 1101   -smartlink $true
-    New-HPOVNetwork -name "prod vm2 A"      -type "Ethernet" -vlanId 1102   -smartlink $true
-    New-HPOVNetwork -name "prod vm3 A"      -type "Ethernet" -vlanId 1103   -smartlink $true
-    New-HPOVNetwork -name "prod vm4 A"      -type "Ethernet" -vlanId 1104   -smartlink $true
-    New-HPOVNetwork -name "prod vm1 B"      -type "Ethernet" -vlanId 1101   -smartlink $true
-    New-HPOVNetwork -name "prod vm2 B"      -type "Ethernet" -vlanId 1102   -smartlink $true
-    New-HPOVNetwork -name "prod vm3 B"      -type "Ethernet" -vlanId 1103   -smartlink $true
-    New-HPOVNetwork -name "prod vm4 B"      -type "Ethernet" -vlanId 1104   -smartlink $true
-    New-HPOVNetwork -name "test vm1 A"      -type "Ethernet" -vlanId 1111   -smartlink $true
-    New-HPOVNetwork -name "test vm2 A"      -type "Ethernet" -vlanId 1112   -smartlink $true
-    New-HPOVNetwork -name "test vm3 A"      -type "Ethernet" -vlanId 1113   -smartlink $true
-    New-HPOVNetwork -name "test vm4 A"      -type "Ethernet" -vlanId 1114   -smartlink $true
-    New-HPOVNetwork -name "test vm1 B"      -type "Ethernet" -vlanId 1111   -smartlink $true
-    New-HPOVNetwork -name "test vm2 B"      -type "Ethernet" -vlanId 1112   -smartlink $true
-    New-HPOVNetwork -name "test vm3 B"      -type "Ethernet" -vlanId 1113   -smartlink $true
-    New-HPOVNetwork -name "test vm4 B"      -type "Ethernet" -vlanId 1114   -smartlink $true
-    New-HPOVNetwork -name "dev vm1 A"       -type "Ethernet" -vlanId 1121   -smartlink $true
-    New-HPOVNetwork -name "dev vm2 A"       -type "Ethernet" -vlanId 1122   -smartlink $true
-    New-HPOVNetwork -name "dev vm3 A"       -type "Ethernet" -vlanId 1123   -smartlink $true
-    New-HPOVNetwork -name "dev vm4 A"       -type "Ethernet" -vlanId 1124   -smartlink $true
-    New-HPOVNetwork -name "dev vm1 B"       -type "Ethernet" -vlanId 1121   -smartlink $true
-    New-HPOVNetwork -name "dev vm2 B"       -type "Ethernet" -vlanId 1122   -smartlink $true
-    New-HPOVNetwork -name "dev vm3 B"       -type "Ethernet" -vlanId 1123   -smartlink $true
-    New-HPOVNetwork -name "dev vm4 B"       -type "Ethernet" -vlanId 1124   -smartlink $true
-    New-HPOVNetwork -name "iSCSI"           -type "Ethernet" -vlanId 22     -smartlink $true
+    # Create Ethernet networks
+    # Current version of the library does not allow the creation of Ethernet networks on a VM appliance, so we have to resort to Send-OVRequest
+    $body = @{
+        name = "";
+        vlanId = "";
+        purpose = "General";
+        smartLink = $true;
+        privateNetwork = $false;
+        connectionTemplateUri = $null;
+        ethernetNetworkType = "Tagged";
+        type = "ethernet-networkV4"
+    }
+    $body.name = "corpnet A"
+    $body.vlanId = 10
+    Send-OVRequest "/rest/ethernet-networks" -method POST -body $body
 
+    $body.name = "corpnet B"
+    $body.vlanId = 10
+    Send-OVRequest "/rest/ethernet-networks" -method POST -body $body
+
+    $body.name = "ESXi mgmt A"
+    $body.vlanId = 1131
+    Send-OVRequest "/rest/ethernet-networks" -method POST -body $body
+
+    $body.name = "ESXi mgmt B"
+    $body.vlanId = 1131
+    Send-OVRequest "/rest/ethernet-networks" -method POST -body $body
+
+    $body.name = "ESXi vmotion A"
+    $body.vlanId = 1132
+    Send-OVRequest "/rest/ethernet-networks" -method POST -body $body
+
+    $body.name = "ESXi vmotion B"
+    $body.vlanId = 1132
+    Send-OVRequest "/rest/ethernet-networks" -method POST -body $body
+
+    $body.name = "prod vm1 A"
+    $body.vlanId = 1101
+    Send-OVRequest "/rest/ethernet-networks" -method POST -body $body
+    $body.name = "prod vm1 B"
+    $body.vlanId = 1101
+    Send-OVRequest "/rest/ethernet-networks" -method POST -body $body
+
+    $body.name = "prod vm2 A"
+    $body.vlanId = 1102
+    Send-OVRequest "/rest/ethernet-networks" -method POST -body $body
+    $body.name = "prod vm2 B"
+    $body.vlanId = 1102
+    Send-OVRequest "/rest/ethernet-networks" -method POST -body $body
+
+    $body.name = "prod vm3 A"
+    $body.vlanId = 1103
+    Send-OVRequest "/rest/ethernet-networks" -method POST -body $body
+    $body.name = "prod vm3 B"
+    $body.vlanId = 1103
+    Send-OVRequest "/rest/ethernet-networks" -method POST -body $body
+    
+    $body.name = "prod vm4 A"
+    $body.vlanId = 1104
+    Send-OVRequest "/rest/ethernet-networks" -method POST -body $body
+    $body.name = "prod vm4 B"
+    $body.vlanId = 1104
+    Send-OVRequest "/rest/ethernet-networks" -method POST -body $body
+    
+    $body.name = "test vm1 A"
+    $body.vlanId = 1111
+    Send-OVRequest "/rest/ethernet-networks" -method POST -body $body
+    $body.name = "test vm1 B"
+    $body.vlanId = 1111
+    Send-OVRequest "/rest/ethernet-networks" -method POST -body $body
+    
+    $body.name = "test vm2 A"
+    $body.vlanId = 1112
+    Send-OVRequest "/rest/ethernet-networks" -method POST -body $body
+    $body.name = "test vm2 B"
+    $body.vlanId = 1112
+    Send-OVRequest "/rest/ethernet-networks" -method POST -body $body
+    
+    $body.name = "test vm3 A"
+    $body.vlanId = 1113
+    Send-OVRequest "/rest/ethernet-networks" -method POST -body $body
+    $body.name = "test vm3 B"
+    $body.vlanId = 1113
+    Send-OVRequest "/rest/ethernet-networks" -method POST -body $body
+    
+    $body.name = "test vm4 A"
+    $body.vlanId = 1114
+    Send-OVRequest "/rest/ethernet-networks" -method POST -body $body
+    $body.name = "test vm4 B"
+    $body.vlanId = 1114
+    Send-OVRequest "/rest/ethernet-networks" -method POST -body $body
+    
+    $body.name = "dev vm1 A"
+    $body.vlanId = 1121
+    Send-OVRequest "/rest/ethernet-networks" -method POST -body $body
+    $body.name = "dev vm1 B"
+    $body.vlanId = 1121
+    Send-OVRequest "/rest/ethernet-networks" -method POST -body $body
+    
+    $body.name = "dev vm2 A"
+    $body.vlanId = 1122
+    Send-OVRequest "/rest/ethernet-networks" -method POST -body $body
+    $body.name = "dev vm2 B"
+    $body.vlanId = 1122
+    Send-OVRequest "/rest/ethernet-networks" -method POST -body $body
+    
+    $body.name = "dev vm3 A"
+    $body.vlanId = 1123
+    Send-OVRequest "/rest/ethernet-networks" -method POST -body $body
+    $body.name = "dev vm3 B"
+    $body.vlanId = 1123
+    Send-OVRequest "/rest/ethernet-networks" -method POST -body $body
+    
+    $body.name = "dev vm4 A"
+    $body.vlanId = 1124
+    Send-OVRequest "/rest/ethernet-networks" -method POST -body $body
+    $body.name = "dev vm4 B"
+    $body.vlanId = 1124
+    Send-OVRequest "/rest/ethernet-networks" -method POST -body $body
+    
     # Create the FC networks
-    New-HPOVNetwork -name "3PAR SAN A fabric" -type "FibreChannel" -typicalBandwidth 4000 -autoLoginRedistribution $true -managedSan "SAN1_0"
-    New-HPOVNetwork -name "3PAR SAN B fabric" -type "FibreChannel" -typicalBandwidth 4000 -autoLoginRedistribution $true -managedSan "SAN1_1"
-    New-HPOVNetwork -name "3PAR SAN A direct" -type "FibreChannel" -typicalBandwidth 4000 -autoLoginRedistribution $true -fabricType DirectAttach
-    New-HPOVNetwork -name "3PAR SAN B direct" -type "FibreChannel" -typicalBandwidth 4000 -autoLoginRedistribution $true -fabricType DirectAttach
+    New-OVNetwork -name "3PAR SAN A fabric" -type "FibreChannel" -typicalBandwidth 4000 -autoLoginRedistribution $true -managedSan "VSAN11"
+    New-OVNetwork -name "3PAR SAN B fabric" -type "FibreChannel" -typicalBandwidth 4000 -autoLoginRedistribution $true -managedSan "VSAN20"
+    New-OVNetwork -name "3PAR SAN A direct" -type "FibreChannel" -typicalBandwidth 4000 -autoLoginRedistribution $true -fabricType DirectAttach
+    New-OVNetwork -name "3PAR SAN B direct" -type "FibreChannel" -typicalBandwidth 4000 -autoLoginRedistribution $true -fabricType DirectAttach
 }
 
 function CreateNetworkSets {
-    $res = New-HPOVNetworkSet -name "Production Networks A" -networks (Get-HPOVNetwork -name "prod*A") -typicalBandwidth 2500 -maximumBandwidth 10000
-    $res = New-HPOVNetworkSet -name "Production Networks B" -networks (Get-HPOVNetwork -name "prod*B") -typicalBandwidth 2500 -maximumBandwidth 10000
-    $res = New-HPOVNetworkSet -name "Test Networks A"       -networks (Get-HPOVNetwork -name "test*A") -typicalBandwidth 2500 -maximumBandwidth 10000
-    $res = New-HPOVNetworkSet -name "Test Networks B"       -networks (Get-HPOVNetwork -name "test*B") -typicalBandwidth 2500 -maximumBandwidth 10000
-    $res = New-HPOVNetworkSet -name "Dev Networks A"        -networks (Get-HPOVNetwork -name "dev*A")  -typicalBandwidth 2500 -maximumBandwidth 10000
-    $res = New-HPOVNetworkSet -name "Dev Networks B"        -networks (Get-HPOVNetwork -name "dev*B")  -typicalBandwidth 2500 -maximumBandwidth 10000
-}
-
-function CreateLogicalInterconnectGroup {
-    $lig = "FlexFabric Logical Interconnect Group"
-    Write-Host "Create the LIG"
-    $task = New-HPOVLogicalInterconnectGroup -ligName $lig -bays @{1 = "Flex2040f8";2 = "Flex2040f8"}
-    $task | Wait-HPOVTaskComplete -timeout (New-TimeSpan -Minutes 5)
-
-    Write-Host "Create the uplink set ESX A and B on " $global:connectedsessions.Name
-    $networks = "ESXi mgmt A","ESXi vmotion A","iSCSI" | Get-HPOVNetwork -type Ethernet
-    $task = Get-HPOVLogicalInterconnectGroup -Name $lig | New-HPOVUplinkSet -usName "esx A" -usType "Ethernet" -usNetworks $networks -usUplinkPorts "BAY1:X1" -usEthMode "Auto"
-    $networks = "ESXi mgmt B","ESXi vmotion B" | Get-HPOVNetwork -type Ethernet
-    $task = Get-HPOVLogicalInterconnectGroup -Name $lig | New-HPOVUplinkSet -usName "esx B" -usType "Ethernet" -usNetworks $networks -usUplinkPorts "BAY2:X1" -usEthMode "Auto"
-
-    Write-Host "Create the uplink set Prod A and B on " $global:connectedsessions.Name
-    $networks = "prod vm1 A","prod vm2 A","prod vm3 A","prod vm4 A" | Get-HPOVNetwork -type Ethernet
-    $task = Get-HPOVLogicalInterconnectGroup -Name $lig | New-HPOVUplinkSet -usName "Production A" -usType "Ethernet" -usNetworks $networks -usUplinkPorts "BAY1:X2" -usEthMode "Auto"
-    $networks = "prod vm1 B","prod vm2 B","prod vm3 B","prod vm4 B" | Get-HPOVNetwork -type Ethernet
-    $task = Get-HPOVLogicalInterconnectGroup -Name $lig | New-HPOVUplinkSet -usName "Production B" -usType "Ethernet" -usNetworks $networks -usUplinkPorts "BAY2:X2" -usEthMode "Auto"
-
-    Write-Host "Create the uplink set Test A and B on " $global:connectedsessions.Name
-    $networks = "test vm1 A","test vm2 A","test vm3 A","test vm4 A" | Get-HPOVNetwork -type Ethernet
-    $task = Get-HPOVLogicalInterconnectGroup -Name $lig | New-HPOVUplinkSet -usName "Test A" -usType "Ethernet" -usNetworks $networks -usUplinkPorts "BAY1:X5" -usEthMode "Auto"
-    $networks = "test vm1 B","test vm2 B","test vm3 B","test vm4 B" | Get-HPOVNetwork -type Ethernet
-    $task = Get-HPOVLogicalInterconnectGroup -Name $lig | New-HPOVUplinkSet -usName "Test B" -usType "Ethernet" -usNetworks $networks -usUplinkPorts "BAY2:X5" -usEthMode "Auto"
-
-    Write-Host "Create the uplink set Dev A and B on " $global:connectedsessions.Name
-    $networks = "dev vm1 A","dev vm2 A","dev vm3 A","dev vm4 A" | Get-HPOVNetwork -type Ethernet
-    $task = Get-HPOVLogicalInterconnectGroup -Name $lig | New-HPOVUplinkSet -usName "Dev A" -usType "Ethernet" -usNetworks $networks -usUplinkPorts "BAY1:X6" -usEthMode "Auto"
-    $networks = "dev vm1 B","dev vm2 B","dev vm3 B","dev vm4 B" | Get-HPOVNetwork -type Ethernet
-    $task = Get-HPOVLogicalInterconnectGroup -Name $lig | New-HPOVUplinkSet -usName "Dev B" -usType "Ethernet" -usNetworks $networks -usUplinkPorts "BAY2:X6" -usEthMode "Auto"
-
-    Write-Host "Create the uplink set SAN A and B direct on " $global:connectedsessions.Name
-    $task = Get-HPOVLogicalInterconnectGroup -Name $lig | New-HPOVUplinkSet -usName "3PAR SAN A direct" -usType "FibreChannel" -usNetworks (Get-HPOVNetwork -name "3PAR SAN A direct") -usUplinkPorts "BAY1:X3","BAY1:X4"
-    $task = Get-HPOVLogicalInterconnectGroup -Name $lig | New-HPOVUplinkSet -usName "3PAR SAN B direct" -usType "FibreChannel" -usNetworks (Get-HPOVNetwork -name "3PAR SAN B direct") -usUplinkPorts "BAY2:X3","BAY2:X4"
-
-    Write-Host "Create the uplink set SAN A and B fabric on " $global:connectedsessions.Name
-    $task = Get-HPOVLogicalInterconnectGroup -Name $lig | New-HPOVUplinkSet -usName "3PAR SAN A fabric" -usType "FibreChannel" -usNetworks (Get-HPOVNetwork -name "3PAR SAN A fabric") -usUplinkPorts "BAY1:X7"
-    $task = Get-HPOVLogicalInterconnectGroup -Name $lig | New-HPOVUplinkSet -usName "3PAR SAN B fabric" -usType "FibreChannel" -usNetworks (Get-HPOVNetwork -name "3PAR SAN B fabric") -usUplinkPorts "BAY2:X7"
-}
-
-function CreateEnclosureGroup {
-    $lig = "FlexFabric Logical Interconnect Group"
-    $EGName = "FlexFabric Enclosure Group"
-    $mylig = Get-HPOVLogicalInterconnectGroup -name $lig
-    $ret = New-HPOVEnclosureGroup -name "$EGName" -logicalInterConnectGroup $mylig
+    $res = New-OVNetworkSet -name "Production Networks A" -networks (Get-OVNetwork -name "prod*A")
+    $res = New-OVNetworkSet -name "Production Networks B" -networks (Get-OVNetwork -name "prod*B")
+    $res = New-OVNetworkSet -name "Test Networks A"       -networks (Get-OVNetwork -name "test*A")
+    $res = New-OVNetworkSet -name "Test Networks B"       -networks (Get-OVNetwork -name "test*B")
+    $res = New-OVNetworkSet -name "Dev Networks A"        -networks (Get-OVNetwork -name "dev*A")
+    $res = New-OVNetworkSet -name "Dev Networks B"        -networks (Get-OVNetwork -name "dev*B")
 }
 
 function ImportStorageArray {
-    $myArrayUser = "dcs"
-    $myArrayPass = "dcs"
+    [securestring]$secStringPassword = ConvertTo-SecureString "dcs" -AsPlainText -Force
+    $credential = New-Object System.Management.Automation.PSCredential('dcs',$secStringPassword)
     $myArrayDCSName = "ThreePAR-1"
     $myArrayDomain = "TestDomain"
     $myArrayPools = [System.Array]("FST_CPG1", "FST_CPG2")
     $myArray = "172.18.11.11"
-    Write-Host "Importing storage array: $myArray"
-    $task = New-HPOVStorageSystem -hostname $myArray -username $myArrayUser -password $myArrayPass -Domain $myArrayDomain
-    $task | Wait-HPOVTaskComplete -timeout (New-TimeSpan -Minutes 15)
-    $tasks = New-HPOVStoragePool -StorageSystem $myArrayDCSName -PoolName $myArrayPools
+    Write-Host "Importing storage array: StoreServ $myArray"
+    $task = Add-OVStorageSystem -hostname $myArray -Credential $credential -Family StoreServ -Domain $myArrayDomain
+    $task | Wait-OVTaskComplete -timeout (New-TimeSpan -Minutes 15)
+    $task = Get-OVStoragePool -Name "FST_CPG*" -ErrorAction Stop | Set-OVStoragePool -Managed $true
+
+    $myArray = "172.18.29.1"
+    Write-Host "Importing storage array: Nimble $myArray"
+    $task = Add-OVStorageSystem -hostname $myArray -Credential $credential -Family Nimble
+    $task | Wait-OVTaskComplete -timeout (New-TimeSpan -Minutes 15)
+    $task = Get-OVStoragePool -Name "default-1" -ErrorAction Stop | Set-OVStoragePool -Managed $true
 }
 
-function ImportEnclosure {
-    try {
-        New-HPOVLicense -LicenseKey 'ACTG D9MA H9PQ 8HV3 V7B5 HWWB Y9JL KMPL WFSF 6DRE DXAU 2CSM GHTG L762 PA2Y W95U KJVT D5KM EFVW DT5J QYML NZ26 9K2P 3E22 JJQ4 LURR TZZX AB6X 82Z5 WHEF D9ED 3RUX BJS2 XFXC T84U R42A 58S5 XA2D WXAP GMTQ 4YLB MM2S CZU7 2E4X E8EW BGB5 BWPD CAAR YT9J 4NUG 2NJN J9UF "424919019 HPOV-NFR1 HP_OneView_16_Seat_NFR 35D9AEYGUYTJ"_3PZ55-B7K33-HX9D8-STKQ6-BLT8W'
-        New-HPOVLicense -LicenseKey 'ACTE D9MA H9PA KHX2 U7B5 HWW5 Y9JL KMPL YFKD NEBE DXAU 2CSM GHTG L762 AAW7 FLNA KJVT D5KM EFVW DT5J YYEJ 4ZK6 9K2P 3E22 RJQ4 LURR TZZH MB5X 82Z5 WHEF D9ED 3RUX BJS2 XFXC T84U R42A 58S5 XA2D WXAP GMTQ 4YLB MM2S CZU7 2E4X E8EW BGB5 BWPD CAAR 2T9J MNEG 2NJN J9UF "424919023 HPOV-NFR2 HP_OneView_w/o_iLO_16_Seat_NFR HUCUAEYGUYHA"'
-        New-HPOVLicense -LicenseKey 'QCDE D9MA H9PY KHW3 V7B5 HWWB Y9JL KMPL 2FKD PERE DXAU 2CSM GHTG L762 CEK4 WMNE KJVT D5KM EFVW DT5J 2YEJ 6Z26 9K2P 3E22 ZJQ4 LURR TZZX 9B5X 82Z5 WHEF D9ED 3RUX BJS2 XFXC T84U R42A 58S5 XA2D WXAP GMTQ 4YLB MM2S CZU7 2E4X E8EW BGB5 BWPD CAAR YT9J 4NUG 2NJN J9UF "424919031 HPOV-NFR1 HP_OneView_16_Seat_NFR CYY7AEYGU2E7"_3M9QC-ZV7MN-TGZPX-GCVST-XNY22'
-    } catch {
-        Write-Host "ERROR: Unable to load license keys"
-    }
-    
-    $enclGroupName = "FlexFabric Enclosure Group"
-    $licenseIntent = "OneView"
-    $myOAUser = "dcs"
-    $myOAPass = "dcs"
-    $myOA = "172.18.1.11"
-    $task = New-HPOVEnclosure -hostname $myOA -enclGroupName $enclGroupName -username $myOAUser -password $myOAPass -licensingIntent $licenseIntent -Async
-    $task | Wait-HPOVTaskComplete -Timeout (New-TimeSpan -Minutes 30)
-    if ( $task.taskState -ieq "Error" ) {
-        Write-Host "Error importing the enclosure"
-        Write-Host "Error array is: " $task.taskErrors
-        Write-Host "Error output is: " $task.taskOutput
-        return 1
-    }
+function CreateVolumes {
+    New-OVStorageVolumeTemplate -templateName PrivateVol -StoragePool (Get-OVSToragePool -Name FST_CPG1) -Capacity 300
+    New-OVStorageVolume -Name SharedVol -StoragePool (Get-OVSToragePool -Name FST_CPG2) -Capacity 2000 -Shared
 }
+function ImportServer {
+    Param ( [Parameter(Mandatory=$True)] [string]$ipaddr
+    )
+
+    [securestring]$secStringPassword = ConvertTo-SecureString "dcs" -AsPlainText -Force
+    $credential = New-Object System.Management.Automation.PSCredential('dcs',$secStringPassword)
+    Write-Host "Adding server $ipaddr"
+    $task = Add-OVServer -Hostname $ipaddr -Credential $credential -Async
+}
+
+function CreateSPTs {
+    # SPT for DL360 Gen10
+    $con1 = Get-OVNetwork -Name "3PAR SAN A fabric" | New-OVServerProfileConnection -ConnectionID 1 -PortId "PCI 1:1"
+    $con2 = Get-OVNetwork -Name "3PAR SAN B fabric" | New-OVServerProfileConnection -ConnectionID 2 -PortId "PCI 1:2"
+    $connections = $con1, $con2
+    $bios = @(@{id='WorkloadProfile';value='Virtualization-MaxPerformance'})
+    $volume1 = Get-OVStorageVolume -Name SharedVol | New-OVServerProfileAttachVolume
+    $ld1 = New-OVServerProfileLogicalDisk -Name LD1 -RAID RAID1 -NumberofDrives 2 # -Bootable:$true
+    $localStorage = New-OVServerProfileLogicalDiskController -ControllerID Embedded -Mode RAID -LogicalDisk $ld1
+    New-OVServerProfileTemplate -Name "DL360 Gen10" -ServerHardwareType (Get-OVServerHardwareType -Name "DL360 Gen10") -Connections $connections -ManageBoot:$true -BootMode "UEFI" -BootOrder "HardDisk" -BootModeConsistencyChecking "Exact" -Bios -BiosSettings $bios -SANStorage -StorageVolume $volume1 -HostOStype VMware -LocalStorage -StorageController $localStorage
+
+# OneView library doesn't accept Ethernet connections for DL servers. Need to use Send-OVRequest to add them
+    $spt = Get-OVServerProfileTemplate -Name "DL360 Gen10"
+    $con3 = Get-OVNetworkSet -Name "Production Networks A" | New-OVServerProfileConnection -ConnectionID 3 
+    $con3 | Add-Member -NotePropertyName 'ports' -NotePropertyValue @(@{portId="Flr 1:1"})
+    $con4 = Get-OVNetworkSet -Name "Production Networks B" | New-OVServerProfileConnection -ConnectionID 4 
+    $con4 | Add-Member -NotePropertyName 'ports' -NotePropertyValue @(@{portId="Flr 1:2"})
+    $spt.connectionSettings.connections = $con1, $con2, $con3, $con4
+
+    # Cleanup connection objects to remove properties added by the library that the backend will not accept
+    $spt.connectionSettings.connections | % {$_.PSObject.Properties.Remove('mac')}
+    $spt.connectionSettings.connections | % {$_.PSObject.Properties.Remove('macType')}
+    $spt.connectionSettings.connections | % {$_.PSObject.Properties.Remove('wwpnType')}
+    $spt.connectionSettings.connections | % {$_.PSObject.Properties.Remove('wwpn')}
+    $spt.connectionSettings.connections | % {$_.PSObject.Properties.Remove('wwnn')}
+    $spt.connectionSettings.connections | % {$_.PSObject.Properties.Remove('ApplianceConnection')}
+    $spt.connectionSettings.connections | % {$_.requestedMbps = $null}
+    $spt.connectionSettings.connections[2].requestedVFs = $null
+    $spt.connectionSettings.connections[3].requestedVFs = $null
+    $spt.PSObject.Properties.Remove('ApplianceConnection')
+    $task = Send-OVRequest $spt.Uri -method PUT -body ($spt | ConvertTo-Json -Depth 6)
+
+    # SPT for DL385 Gen10 Plus
+    $bios = @(@{id='WorkloadProfile';value='Virtualization-MaxPerformance'})
+    $volume1 = Get-OVStorageVolume -Name SharedVol | New-OVServerProfileAttachVolume
+    $ld1 = New-OVServerProfileLogicalDisk -Name LD1 -RAID RAID1 -NumberofDrives 2 # -Bootable:$true
+    $localStorage = New-OVServerProfileLogicalDiskController -ControllerID Slot3 -Mode RAID -LogicalDisk $ld1
+    New-OVServerProfileTemplate -Name "DL385 Gen10 Plus" -ServerHardwareType (Get-OVServerHardwareType -Name "DL385 Gen10 Plus") -ManageBoot:$true -BootMode "UEFI" -BootOrder "HardDisk" -BootModeConsistencyChecking "Exact" -Bios -BiosSettings $bios -LocalStorage -StorageController $localStorage
+
+# OneView library doesn't accept Ethernet connections for DL servers. Need to use Send-OVRequest to add them
+    $spt = Get-OVServerProfileTemplate -Name "DL385 Gen10 Plus"
+    $con1 = Get-OVNetworkSet -Name "Production Networks A" | New-OVServerProfileConnection -ConnectionID 1 
+    $con1 | Add-Member -NotePropertyName 'ports' -NotePropertyValue @(@{portId="Ocp 10:1"})
+    $con2 = Get-OVNetworkSet -Name "Production Networks B" | New-OVServerProfileConnection -ConnectionID 2 
+    $con2 | Add-Member -NotePropertyName 'ports' -NotePropertyValue @(@{portId="Ocp 10:2"})
+    $spt.connectionSettings.manageConnections = $true
+    $spt.connectionSettings.connections = $con1, $con2
+
+    # Cleanup connection objects to remove properties added by the library that the backend will not accept
+    $spt.connectionSettings.connections | % {$_.PSObject.Properties.Remove('mac')}
+    $spt.connectionSettings.connections | % {$_.PSObject.Properties.Remove('macType')}
+    $spt.connectionSettings.connections | % {$_.PSObject.Properties.Remove('wwpnType')}
+    $spt.connectionSettings.connections | % {$_.PSObject.Properties.Remove('wwpn')}
+    $spt.connectionSettings.connections | % {$_.PSObject.Properties.Remove('wwnn')}
+    $spt.connectionSettings.connections | % {$_.PSObject.Properties.Remove('ApplianceConnection')}
+    $spt.connectionSettings.connections | % {$_.requestedMbps = $null}
+    $spt.connectionSettings.connections[0].requestedVFs = $null
+    $spt.connectionSettings.connections[1].requestedVFs = $null
+    $spt.PSObject.Properties.Remove('ApplianceConnection')
+    $task = Send-OVRequest $spt.Uri -method PUT -body ($spt | ConvertTo-Json -Depth 6)
+
+ }
 
 #
 # Main Program
 #
-Import-Module HPOneView.410
-
-$ip_addr  = "<DHCP IP Address assigned to DCS appliance>"
-$password = "<New Administrator Password>"
-$hostname = "<Hostname associated with DHCP IP Address of the DCS appliance>"
 
 #
 # Accept the EULA and configure the Administrator credentials
 #
 ConfigureAppliance $ip_addr "$password" "$hostname"
-Connect-HPOVMgmt -Hostname $ip_addr -UserName Administrator -Password "$password" -ErrorAction Stop
+[securestring]$secStringPassword = ConvertTo-SecureString $password -AsPlainText -Force
+$credential = New-Object System.Management.Automation.PSCredential('Administrator',$secStringPassword)
+Connect-OVMgmt -Hostname $ip_addr -Credential $credential -ErrorAction Stop
 
 #
 # Configure virtual resources
@@ -186,13 +304,14 @@ Connect-HPOVMgmt -Hostname $ip_addr -UserName Administrator -Password "$password
 ImportSanManager
 CreateNetworks
 CreateNetworkSets
-CreateLogicalInterconnectGroup
-CreateEnclosureGroup
 ImportStorageArray
-ImportEnclosure
+CreateVolumes
+(1..14) | foreach-object { ImportServer "172.18.31.$_" }
+(1..4) | foreach-object { ImportServer "172.18.6.$_" }
+CreateSPTs
 
 #
 # Clear any remaining alerts and disconnect from OneView
 #
-Get-HPOVAlert -AlertState Active | Set-HPOVAlert -Cleared
-Disconnect-HPOVMgmt
+Get-OVAlert -AlertState Active | Set-OVAlert -Cleared
+Disconnect-OVMgmt
